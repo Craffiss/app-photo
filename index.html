@@ -557,17 +557,36 @@ function findExif(b) {
   }
   return null;
 }
-function resetOrientation(seg) {
-  const t = 10, le = seg[t] === 0x49, dv = new DataView(seg.buffer, seg.byteOffset, seg.length);
+/* orientation remise à 1 et champ Software remplacé : l'IFD0 est réécrit en fin de segment
+   (les autres données ne bougent pas, leurs offsets restent valides) */
+const SOFTWARE = 'CraffissPhoto';
+function patchExif(seg) {
+  const t = 10, le = seg[t] === 0x49, dv0 = new DataView(seg.buffer, seg.byteOffset, seg.length);
   try {
-    const ifd = t + dv.getUint32(t + 4, le), n = dv.getUint16(ifd, le);
-    for (let k = 0; k < n; k++) { const e = ifd + 2 + k * 12; if (dv.getUint16(e, le) === 0x0112) { dv.setUint16(e + 8, 1, le); break; } }
-  } catch {}
+    const ifd = t + dv0.getUint32(t + 4, le), n = dv0.getUint16(ifd, le), ents = [];
+    for (let k = 0; k < n; k++) {
+      const e = ifd + 2 + k * 12, tag = dv0.getUint16(e, le);
+      if (tag === 0x0112) dv0.setUint16(e + 8, 1, le);
+      if (tag !== 0x0131) ents.push([tag, seg.slice(e, e + 12)]);
+    }
+    const next = dv0.getUint32(ifd + 2 + n * 12, le), str = new TextEncoder().encode(SOFTWARE + '\0');
+    const base = (seg.length - t + 1) & ~1, cnt = ents.length + 1, strOff = base + 2 + cnt * 12 + 4, total = t + strOff + str.length;
+    if (total > 65537) return seg;
+    const sw = new Uint8Array(12), sd = new DataView(sw.buffer);
+    sd.setUint16(0, 0x0131, le); sd.setUint16(2, 2, le); sd.setUint32(4, str.length, le); sd.setUint32(8, strOff, le);
+    ents.push([0x0131, sw]); ents.sort((a, b) => a[0] - b[0]);
+    const out = new Uint8Array(total), dv = new DataView(out.buffer); out.set(seg);
+    let p = t + base; dv.setUint16(p, cnt, le); p += 2;
+    for (const [, b] of ents) { out.set(b, p); p += 12; }
+    dv.setUint32(p, next, le); out.set(str, t + strOff);
+    dv.setUint32(t + 4, base, le); dv.setUint16(2, total - 2);
+    return out;
+  } catch { return seg; }
 }
 async function withExif(out, orig) {
-  const exif = findExif(new Uint8Array(await orig.slice(0, 256 * 1024).arrayBuffer()));
+  let exif = findExif(new Uint8Array(await orig.slice(0, 256 * 1024).arrayBuffer()));
   if (!exif) return out;
-  resetOrientation(exif);
+  exif = patchExif(exif);
   const o = new Uint8Array(await out.arrayBuffer());
   let p = 2; // saute SOI et un éventuel APP0 JFIF (l'EXIF doit suivre SOI)
   if (o[2] === 0xFF && o[3] === 0xE0) p = 4 + (o[4] << 8 | o[5]);
