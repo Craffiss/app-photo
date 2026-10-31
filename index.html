@@ -37,7 +37,18 @@ input[type=range]{width:100%;accent-color:var(--acc)}
 .sw{width:30px;height:30px;border-radius:50%;padding:0;border:2px solid transparent}
 .sw.on{border-color:#fff}
 .hint{color:var(--dim);font-size:12.5px;margin:8px 0}
-canvas#curve{width:100%;max-width:300px;aspect-ratio:1;background:#0c0d0e;border:1px solid var(--line);border-radius:8px;touch-action:none;display:block}
+canvas#curve{width:min(100%,210px);aspect-ratio:1;background:#0c0d0e;border:1px solid var(--line);border-radius:8px;touch-action:none;display:block;margin:0 auto 4px}
+#cropOv{position:absolute;pointer-events:none;touch-action:none}
+#cropBox{position:absolute;pointer-events:auto;touch-action:none;box-shadow:0 0 0 9999px #000a;border:1.5px solid #fff;cursor:move;
+  background:linear-gradient(#fff4,#fff4) 33.3% 0/1px 100% no-repeat,linear-gradient(#fff4,#fff4) 66.6% 0/1px 100% no-repeat,
+    linear-gradient(#fff4,#fff4) 0 33.3%/100% 1px no-repeat,linear-gradient(#fff4,#fff4) 0 66.6%/100% 1px no-repeat}
+#cropBox .h{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px}
+#cropBox .h::after{content:"";position:absolute;left:50%;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;background:#fff;border-radius:3px}
+#cropBox .h[data-h=nw]{left:0;top:0}#cropBox .h[data-h=n]{left:50%;top:0}#cropBox .h[data-h=ne]{left:100%;top:0}
+#cropBox .h[data-h=e]{left:100%;top:50%}#cropBox .h[data-h=se]{left:100%;top:100%}#cropBox .h[data-h=s]{left:50%;top:100%}
+#cropBox .h[data-h=sw]{left:0;top:100%}#cropBox .h[data-h=w]{left:0;top:50%}
+#cropBox.lock .h[data-h=n],#cropBox.lock .h[data-h=e],#cropBox.lock .h[data-h=s],#cropBox.lock .h[data-h=w]{display:none}
+#stage.pick #view{cursor:crosshair}
 .preset{display:flex;gap:6px;margin:6px 0}
 .preset .name{flex:1;text-align:left}
 .preset .name.on{border-color:var(--acc);color:var(--acc)}
@@ -54,6 +65,7 @@ progress{width:100%;accent-color:var(--acc)}
 <div id="stage">
   <canvas id="view"></canvas>
   <div id="empty">Ajoute des photos JPEG<br>puis importe tes presets (.xmp / .lrtemplate)</div>
+  <div id="cropOv" hidden><div id="cropBox"></div></div>
   <button id="cmp" hidden>Maintenir : avant</button>
 </div>
 <div id="thumbs"></div>
@@ -73,10 +85,19 @@ progress{width:100%;accent-color:var(--acc)}
   <section class="tab" data-tab="Lumière"><div id="sLight"></div></section>
 
   <section class="tab" data-tab="Couleur">
+    <div class="chips"><button class="chip" id="wbPick">Pipette</button><button class="chip" id="wbAuto">Balance auto</button></div>
+    <div class="hint" id="wbHint">Balance des blancs : pipette sur une zone grise ou blanche, ou réglage automatique.</div>
     <div id="sColor"></div>
     <h3 style="margin:18px 0 4px;font-size:14px">HSL</h3>
     <div class="chips" id="bands"></div>
     <div id="sHsl"></div>
+  </section>
+
+  <section class="tab" data-tab="Recadrer">
+    <div class="chips" id="arCh"></div>
+    <div id="sCrop"></div>
+    <div class="chips"><button class="chip" id="rotL">⟲ 90°</button><button class="chip" id="rotR">⟳ 90°</button><button class="chip" id="cropReset">Réinitialiser</button></div>
+    <div class="hint">Glisse les coins ou l'intérieur du cadre sur la photo. Le recadrage est appliqué en quittant cet onglet.</div>
   </section>
 
   <section class="tab" data-tab="Courbe">
@@ -142,8 +163,14 @@ const MAX_PIX = IOS || /^((?!chrome|android).)*safari/i.test(navigator.userAgent
 /* ---------- moteur ---------- */
 const LIN = new Float32Array(256); for (let i = 0; i < 256; i++) { const c = i / 255; LIN[i] = c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; }
 const ENC = new Float32Array(4097); for (let i = 0; i <= 4096; i++) { const c = i / 4096; ENC[i] = c <= .0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - .055; }
-const NOISE = (() => { const n = new Float32Array(256 * 256); let s = 1234567; const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296 - .5;
-  for (let i = 0; i < n.length; i++) n[i] = (rnd() + rnd() + rnd() + rnd()) * 1.732; return n; })();
+/* grain : bruit de valeur lissé sur deux grilles décalées/tournées + un peu de bruit fin, sans tuile répétée */
+const hash2 = (x, y, s) => { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + s) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16; return (h >>> 0) / 4294967296 - .5; };
+const vnoise = (u, v, s) => {
+  const xi = Math.floor(u), yi = Math.floor(v); let fx = u - xi, fy = v - yi; fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+  const a = hash2(xi, yi, s), b = hash2(xi + 1, yi, s), c = hash2(xi, yi + 1, s), d = hash2(xi + 1, yi + 1, s);
+  const t = a + (b - a) * fx; return t + (c + (d - c) * fx - t) * fy;
+};
+const COS = Math.cos(.64), SIN = Math.sin(.64);
 
 function makeCurve(pts) {
   const p = [...pts].sort((a, b) => a[0] - b[0]), n = p.length;
@@ -188,14 +215,13 @@ function prepare(p, longSide) {
     const f0 = makeCurve(cv.rgb), fs = ['r', 'g', 'b'].map(k => makeCurve(cv[k]));
     T.lut = fs.map(f => { const l = new Float32Array(1024); for (let i = 0; i < 1024; i++) l[i] = clamp(f(clamp(f0(i / 1023)))); return l; });
   }
-  T.grainAmt = p.grain / 100 * .18;
-  const sz = (.8 + p.grainSize / 100 * 3) * (longSide / 3000);
-  T.inv = 1 / sz; T.gAmp = T.grainAmt * Math.sqrt(Math.max(1, sz));
+  const sz = Math.max(1.1, (.7 + p.grainSize / 100 * 2.6) * (longSide / 2800));
+  T.inv = 1 / sz; T.gAmp = p.grain / 100 * .11;
   return T;
 }
 
 function process(img, y0, y1, T) {
-  const W = img.width, d = img.data, p = T.p, N = NOISE;
+  const W = img.width, d = img.data, p = T.p;
   const { ev, gr, gb, gg, sh, hi, wh, bl, cf, sat, vib, dh, ms, dl, lut, inv, gAmp } = T;
   for (let y = y0; y < y1; y++) for (let x = 0; x < W; x++) {
     const i = (y * W + x) * 4;
@@ -224,9 +250,8 @@ function process(img, y0, y1, T) {
     }
     if (T.curve) { r = lut[0][(r * 1023 + .5) | 0]; g = lut[1][(g * 1023 + .5) | 0]; b = lut[2][(b * 1023 + .5) | 0]; }
     if (gAmp) {
-      const u = x * inv, v = y * inv, xi = Math.floor(u), yi = Math.floor(v), fx = u - xi, fy = v - yi;
-      const x0 = xi & 255, x1 = (xi + 1) & 255, y0_ = (yi & 255) << 8, y1_ = ((yi + 1) & 255) << 8;
-      const n = (N[y0_ | x0] * (1 - fx) + N[y0_ | x1] * fx) * (1 - fy) + (N[y1_ | x0] * (1 - fx) + N[y1_ | x1] * fx) * fy;
+      const u = x * inv, v = y * inv;
+      const n = 4.4 * vnoise(u, v, 11) + 4.4 * vnoise((u * COS - v * SIN) * 1.7 + 50, (u * SIN + v * COS) * 1.7 + 50, 23) + .5 * hash2(x, y, 99);
       const ll = .2126 * r + .7152 * g + .0722 * b, w = 1 - .6 * (2 * ll - 1) ** 2, k = n * gAmp * w;
       r += k; g += k; b += k;
     }
@@ -254,16 +279,44 @@ async function addPhoto(file) {
   const c = el('canvas', { width: w, height: h }), cx = ctx2d(c, true);
   cx.drawImage(im, 0, 0, w, h);
   const t = el('canvas', { width: 96, height: Math.round(96 * h / w) }); t.getContext('2d').drawImage(c, 0, 0, t.width, t.height);
-  photos.push({ file, name: file.name.replace(/\.[^.]+$/, ''), src: cx.getImageData(0, 0, w, h), thumb: t.toDataURL('image/jpeg', .7) });
+  const ph = { file, name: file.name.replace(/\.[^.]+$/, ''), cv: c, geo: newGeo(), thumb: t.toDataURL('image/jpeg', .7) };
+  rebuildSrc(ph); photos.push(ph);
   URL.revokeObjectURL(u);
+}
+
+/* ---------- géométrie : rotation, redressement, recadrage ---------- */
+const newGeo = () => ({ r: 0, angle: 0, cx: 0, cy: 0, cw: 1, ch: 1, ar: null });
+const G = () => photos[cur] ? photos[cur].geo : newGeo();
+let cropMode = false;
+const frameDims = (iw, ih, g) => g.r & 1 ? { Wr: ih, Hr: iw } : { Wr: iw, Hr: ih };
+function geoScale(Wr, Hr, deg) {
+  if (!deg) return 1;
+  const a = Math.abs(deg) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  return Math.max(c + Hr / Wr * s, c + Wr / Hr * s) * 1.003;
+}
+function drawGeo(img, iw, ih, g, k) {
+  const { Wr, Hr } = frameDims(iw, ih, g), W = Wr * k, H = Hr * k;
+  const x0 = Math.round(g.cx * W), y0 = Math.round(g.cy * H);
+  const c = el('canvas', { width: Math.max(1, Math.round(g.cw * W)), height: Math.max(1, Math.round(g.ch * H)) }), x = ctx2d(c, true);
+  x.imageSmoothingQuality = 'high';
+  x.translate(W / 2 - x0, H / 2 - y0); x.rotate((g.r * 90 + g.angle) * Math.PI / 180);
+  const s = geoScale(Wr, Hr, g.angle) * k; x.scale(s, s);
+  x.drawImage(img, -iw / 2, -ih / 2, iw, ih);
+  return c;
+}
+function rebuildSrc(ph) {
+  const g = cropMode ? Object.assign({}, ph.geo, { cx: 0, cy: 0, cw: 1, ch: 1 }) : ph.geo;
+  const c = drawGeo(ph.cv, ph.cv.width, ph.cv.height, g, 1);
+  ph.src = ctx2d(c, true).getImageData(0, 0, c.width, c.height);
+  if (photos[cur] === ph) { view.width = ph.src.width; view.height = ph.src.height; placeOverlay(); }
 }
 function drawThumbs() {
   const box = $('#thumbs'); box.replaceChildren();
   photos.forEach((p, i) => box.append(el('img', { src: p.thumb, className: i === cur ? 'on' : '', onclick: () => select(i) })));
 }
 function select(i) {
-  cur = i; const ph = photos[i]; view.width = ph.src.width; view.height = ph.src.height;
-  $('#empty').hidden = true; $('#cmp').hidden = false; drawThumbs(); render();
+  cur = i; const ph = photos[i]; rebuildSrc(ph);
+  $('#empty').hidden = true; $('#cmp').hidden = cropMode; drawThumbs(); syncAll(); showBox(); render();
 }
 $('#fPhotos').onchange = async e => {
   const files = [...e.target.files]; e.target.value = '';
@@ -302,6 +355,90 @@ BAND_FR.forEach((n, i) => $('#bands').append(el('button', {
   onclick: e => { band = i; [...$('#bands').children].forEach((b, j) => b.classList.toggle('on', j === i)); syncAll(); }
 })));
 const syncAll = () => syncers.forEach(f => f());
+
+/* ---------- balance des blancs ---------- */
+let wbPick = false;
+const wbHint = $('#wbHint'), WB_TXT = wbHint.textContent;
+function setPick(on) { wbPick = on; $('#wbPick').classList.toggle('on', on); $('#stage').classList.toggle('pick', on); wbHint.textContent = on ? 'Touche une zone qui doit être grise ou blanche.' : WB_TXT; }
+function applyWB(R, G_, B) {
+  if (R < 1e-4 || G_ < 1e-4 || B < 1e-4) return;
+  const t = clamp((B - R) / (.3 * (R + B)), -1, 1), m = (R * (1 + .3 * t) + B * (1 - .3 * t)) / 2;
+  P.temp = Math.round(t * 100); P.tint = Math.round(clamp(500 * (1 - m / G_), -100, 100));
+  syncAll(); schedule();
+}
+function meanLinear(img, x0, y0, x1, y1, step) {
+  let r = 0, g = 0, b = 0, n = 0; const d = img.data, W = img.width;
+  for (let y = y0; y < y1; y += step) for (let x = x0; x < x1; x += step) { const i = (y * W + x) * 4; r += LIN[d[i]]; g += LIN[d[i + 1]]; b += LIN[d[i + 2]]; n++; }
+  return n ? [r / n, g / n, b / n] : [0, 0, 0];
+}
+$('#wbPick').onclick = () => setPick(!wbPick && !!photos[cur]);
+$('#wbAuto').onclick = () => { const ph = photos[cur]; if (!ph) return; setPick(false); applyWB(...meanLinear(ph.src, 0, 0, ph.src.width, ph.src.height, 3)); };
+view.addEventListener('pointerup', e => {
+  const ph = photos[cur]; if (!wbPick || !ph || cropMode) return;
+  const r = view.getBoundingClientRect(), s = ph.src;
+  const px = Math.round((e.clientX - r.left) / r.width * s.width), py = Math.round((e.clientY - r.top) / r.height * s.height), h = 4;
+  setPick(false);
+  applyWB(...meanLinear(s, clamp(px - h, 0, s.width - 1) | 0, clamp(py - h, 0, s.height - 1) | 0, Math.min(s.width, px + h + 1), Math.min(s.height, py + h + 1), 1));
+});
+
+/* ---------- recadrage ---------- */
+const AR = [['Libre', null], ['Original', 'o'], ['1:1', 1], ['4:5', 4 / 5], ['5:4', 5 / 4], ['3:2', 3 / 2], ['2:3', 2 / 3], ['16:9', 16 / 9], ['9:16', 9 / 16]];
+const MIN = .05, cropOv = $('#cropOv'), cropBox = $('#cropBox');
+['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].forEach(h => { const d = el('div', { className: 'h' }); d.dataset.h = h; cropBox.append(d); });
+const frameOf = () => { const ph = photos[cur]; return ph ? frameDims(ph.cv.width, ph.cv.height, ph.geo) : { Wr: 1, Hr: 1 }; };
+function arK() { const a = G().ar, { Wr, Hr } = frameOf(); return a ? (a === 'o' ? 1 : a * Hr / Wr) : null; }
+function placeOverlay() {
+  if (!cropMode) return;
+  const r = view.getBoundingClientRect(), s = $('#stage').getBoundingClientRect();
+  Object.assign(cropOv.style, { left: r.left - s.left + 'px', top: r.top - s.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+}
+function showBox() {
+  const g = G(); cropBox.classList.toggle('lock', !!g.ar);
+  Object.assign(cropBox.style, { left: g.cx * 100 + '%', top: g.cy * 100 + '%', width: g.cw * 100 + '%', height: g.ch * 100 + '%' });
+}
+function fitAspect() {
+  const g = G(), k = arK(); if (!k) return;
+  const w = Math.min(1, k), h = w / k; Object.assign(g, { cw: w, ch: h, cx: (1 - w) / 2, cy: (1 - h) / 2 });
+}
+function setCropMode(on) {
+  if (cropMode === on) return; cropMode = on; setPick(false);
+  cropOv.hidden = !on; $('#cmp').hidden = on || !photos[cur];
+  if (photos[cur]) { rebuildSrc(photos[cur]); if (on) { placeOverlay(); showBox(); } render(); }
+}
+AR.forEach(([n, v]) => $('#arCh').append(el('button', { className: 'chip', textContent: n, onclick: () => { G().ar = v; fitAspect(); drawAr(); showBox(); } })));
+function drawAr() { [...$('#arCh').children].forEach((b, i) => b.classList.toggle('on', AR[i][1] === G().ar)); }
+syncers.push(drawAr);
+slider($('#sCrop'), 'Redresser', -45, 45, .1, () => G().angle, v => { G().angle = v; if (photos[cur]) rebuildSrc(photos[cur]); });
+function rotate90(d) { const g = G(); g.r = (g.r + d + 4) % 4; Object.assign(g, { cx: 0, cy: 0, cw: 1, ch: 1 }); fitAspect(); if (photos[cur]) rebuildSrc(photos[cur]); showBox(); schedule(); }
+$('#rotL').onclick = () => rotate90(-1); $('#rotR').onclick = () => rotate90(1);
+$('#cropReset').onclick = () => { Object.assign(G(), newGeo()); if (photos[cur]) rebuildSrc(photos[cur]); syncAll(); showBox(); schedule(); };
+const np = e => { const r = cropOv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]; };
+let cdrag = null;
+cropBox.onpointerdown = e => {
+  const h = e.target.dataset.h || (e.target === cropBox ? 'move' : null); if (!h) return;
+  cropBox.setPointerCapture(e.pointerId); cdrag = { h, p: np(e), o: Object.assign({}, G()) }; e.preventDefault();
+};
+cropBox.onpointermove = e => {
+  if (!cdrag) return; const g = G(), o = cdrag.o, [x, y] = np(e), [x0, y0] = cdrag.p, hd = cdrag.h;
+  if (hd === 'move') { g.cx = clamp(o.cx + x - x0, 0, 1 - o.cw); g.cy = clamp(o.cy + y - y0, 0, 1 - o.ch); }
+  else {
+    const L = hd.includes('w'), R = hd.includes('e'), T = hd.includes('n'), B = hd.includes('s'), k = arK();
+    if ((L || R) && (T || B)) {
+      const ax = L ? o.cx + o.cw : o.cx, ay = T ? o.cy + o.ch : o.cy, dx = L ? -1 : 1, dy = T ? -1 : 1, mw = dx > 0 ? 1 - ax : ax, mh = dy > 0 ? 1 - ay : ay;
+      let w = Math.max(MIN, (x - ax) * dx), h = Math.max(MIN, (y - ay) * dy);
+      if (k) { if (w / k > h) h = w / k; else w = h * k; const s = Math.min(1, mw / w, mh / h); w *= s; h *= s; }
+      else { w = Math.min(w, mw); h = Math.min(h, mh); }
+      Object.assign(g, { cw: w, ch: h, cx: dx > 0 ? ax : ax - w, cy: dy > 0 ? ay : ay - h });
+    } else {
+      let a = o.cx, b = o.cx + o.cw, c = o.cy, d = o.cy + o.ch;
+      if (L) a = clamp(x, 0, b - MIN); if (R) b = clamp(x, a + MIN, 1); if (T) c = clamp(y, 0, d - MIN); if (B) d = clamp(y, c + MIN, 1);
+      Object.assign(g, { cx: a, cw: b - a, cy: c, ch: d - c });
+    }
+  }
+  showBox();
+};
+cropBox.onpointerup = cropBox.onpointercancel = () => { cdrag = null; };
+new ResizeObserver(placeOverlay).observe(view);
 
 /* ---------- courbe ---------- */
 const cc = $('#curve'), cctx = cc.getContext('2d'); let chan = 'rgb', drag = -1;
@@ -406,10 +543,10 @@ $('#resetAll').onclick = () => { P = neutral(); base = null; activePreset = -1; 
 let results = [];
 async function exportPhoto(ph, onRows) {
   const { im, u } = await loadImg(ph.file);
-  const k = Math.min(1, Math.sqrt(MAX_PIX / (im.naturalWidth * im.naturalHeight)));
-  const w = Math.round(im.naturalWidth * k), h = Math.round(im.naturalHeight * k);
-  const c = el('canvas', { width: w, height: h }), cx = ctx2d(c, true);
-  cx.drawImage(im, 0, 0, w, h); URL.revokeObjectURL(u);
+  const iw = im.naturalWidth, ih = im.naturalHeight, g = ph.geo, { Wr, Hr } = frameDims(iw, ih, g);
+  const k = Math.min(1, Math.sqrt(MAX_PIX / (g.cw * Wr * g.ch * Hr)));
+  const c = drawGeo(im, iw, ih, g, k), cx = ctx2d(c, true), w = c.width, h = c.height;
+  URL.revokeObjectURL(u);
   const data = cx.getImageData(0, 0, w, h), T = prepare(P, Math.max(w, h));
   for (let y = 0; y < h; y += 128) { process(data, y, Math.min(h, y + 128), T); onRows(y / h); await new Promise(r => setTimeout(r)); }
   cx.putImageData(data, 0, 0);
@@ -448,7 +585,7 @@ $('#btnSave').onclick = async () => {
 const tabs = [...document.querySelectorAll('.tab')];
 tabs.forEach((t, i) => $('#nav').append(el('button', { textContent: t.dataset.tab, className: i ? '' : 'on', onclick: e => {
   [...$('#nav').children].forEach(b => b.classList.toggle('on', b === e.target));
-  tabs.forEach(x => x.classList.toggle('on', x === t)); if (t.dataset.tab === 'Courbe') drawCurve();
+  tabs.forEach(x => x.classList.toggle('on', x === t)); setCropMode(t.dataset.tab === 'Recadrer'); if (t.dataset.tab === 'Courbe') drawCurve();
 } })));
 tabs[0].classList.add('on');
 addEventListener('resize', drawCurve);
