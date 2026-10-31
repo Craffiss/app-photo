@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Preset Fusion</title>
+<style>
+:root{--bg:#111214;--panel:#1b1d20;--line:#2c2f34;--fg:#eceef1;--dim:#8b919a;--acc:#e9b44c}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,system-ui,sans-serif}
+body{display:flex;flex-direction:column;max-width:760px;margin:0 auto;padding-top:env(safe-area-inset-top)}
+header{display:flex;gap:8px;align-items:center;padding:10px 14px}
+header h1{font-size:16px;margin:0;flex:1;font-weight:600}
+button,.btn{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:9px 14px;font:inherit;cursor:pointer}
+button.pri,.btn.pri{background:var(--acc);color:#1a1300;border-color:var(--acc);font-weight:600}
+button:disabled{opacity:.4}
+#stage{position:relative;flex:0 0 auto;height:42vh;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden}
+#view{max-width:100%;max-height:100%;touch-action:none}
+#empty{position:absolute;color:var(--dim);text-align:center;padding:20px}
+#cmp{position:absolute;right:10px;bottom:10px;font-size:13px;padding:7px 12px;background:#000a;user-select:none;-webkit-user-select:none}
+#thumbs{display:flex;gap:6px;overflow-x:auto;padding:8px 14px}
+#thumbs img{height:48px;border-radius:6px;border:2px solid transparent;opacity:.7}
+#thumbs img.on{border-color:var(--acc);opacity:1}
+nav{display:flex;overflow-x:auto;border-bottom:1px solid var(--line);padding:0 8px}
+nav button{border:0;border-radius:0;background:none;color:var(--dim);padding:11px 12px;white-space:nowrap;border-bottom:2px solid transparent}
+nav button.on{color:var(--fg);border-color:var(--acc)}
+#panel{flex:1;overflow-y:auto;padding:12px 14px calc(20px + env(safe-area-inset-bottom))}
+.tab{display:none}.tab.on{display:block}
+.row{display:grid;grid-template-columns:92px 1fr 46px;gap:8px;align-items:center;margin:9px 0}
+.row label{color:var(--dim);font-size:13px}
+.row output{text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
+input[type=range]{width:100%;accent-color:var(--acc)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{padding:7px 11px;border-radius:999px;font-size:13px}
+.chip.on{border-color:var(--acc);color:var(--acc)}
+.sw{width:30px;height:30px;border-radius:50%;padding:0;border:2px solid transparent}
+.sw.on{border-color:#fff}
+.hint{color:var(--dim);font-size:12.5px;margin:8px 0}
+canvas#curve{width:100%;max-width:300px;aspect-ratio:1;background:#0c0d0e;border:1px solid var(--line);border-radius:8px;touch-action:none;display:block}
+.preset{display:flex;gap:6px;margin:6px 0}
+.preset .name{flex:1;text-align:left}
+.preset .name.on{border-color:var(--acc);color:var(--acc)}
+select{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:9px;font:inherit}
+progress{width:100%;accent-color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Preset Fusion</h1>
+  <label class="btn pri">Photos<input id="fPhotos" type="file" accept="image/*" multiple hidden></label>
+</header>
+
+<div id="stage">
+  <canvas id="view"></canvas>
+  <div id="empty">Ajoute des photos JPEG<br>puis importe tes presets (.xmp / .lrtemplate)</div>
+  <button id="cmp" hidden>Maintenir : avant</button>
+</div>
+<div id="thumbs"></div>
+
+<nav id="nav"></nav>
+<div id="panel">
+
+  <section class="tab" data-tab="Presets">
+    <label class="btn">Importer des presets<input id="fPresets" type="file" multiple hidden></label>
+    <div class="hint">Fichiers .xmp ou .lrtemplate. Exposition, contraste, tons, HSL, courbes et grain sont lus ; les autres réglages Lightroom sont ignorés.</div>
+    <div id="presetList"></div>
+    <div class="row"><label>Intensité</label><input id="intensity" type="range" min="0" max="100" value="100"><output>100</output></div>
+    <button id="resetAll">Tout réinitialiser</button>
+    <div id="presetInfo" class="hint"></div>
+  </section>
+
+  <section class="tab" data-tab="Lumière"><div id="sLight"></div></section>
+
+  <section class="tab" data-tab="Couleur">
+    <div id="sColor"></div>
+    <h3 style="margin:18px 0 4px;font-size:14px">HSL</h3>
+    <div class="chips" id="bands"></div>
+    <div id="sHsl"></div>
+  </section>
+
+  <section class="tab" data-tab="Courbe">
+    <div class="chips" id="curveCh"></div>
+    <canvas id="curve"></canvas>
+    <div class="hint">Toucher pour ajouter un point, glisser pour le déplacer, double-toucher ou le sortir du cadre pour le supprimer.</div>
+    <button id="curveReset">Réinitialiser la courbe</button>
+  </section>
+
+  <section class="tab" data-tab="Grain"><div id="sGrain"></div></section>
+
+  <section class="tab" data-tab="Export">
+    <div class="row" style="grid-template-columns:92px 1fr"><label>Format</label>
+      <select id="fmt">
+        <option value="png">PNG – sans aucune perte</option>
+        <option value="jpg">JPEG – qualité 100 %</option>
+      </select></div>
+    <div class="hint">Résolution d'origine conservée, aucun redimensionnement (sauf photos dépassant la limite du navigateur, signalé). Les métadonnées EXIF ne sont pas conservées.</div>
+    <button class="pri" id="btnExport">Exporter cette photo</button>
+    <button id="btnExportAll">Exporter toutes les photos</button>
+    <progress id="prog" value="0" max="1" hidden></progress>
+    <div id="expStatus" class="hint"></div>
+    <button id="btnSave" hidden>Enregistrer / Partager</button>
+  </section>
+</div>
+
+<script src="builtin.js" onerror="void 0"></script>
+<script>
+'use strict';
+const $ = (s, r = document) => r.querySelector(s);
+const el = (t, props = {}, kids = []) => { const e = Object.assign(document.createElement(t), props); kids.forEach(k => e.append(k)); return e; };
+const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+
+/* ---------- état ---------- */
+const BANDS = ['Red', 'Orange', 'Yellow', 'Green', 'Aqua', 'Blue', 'Purple', 'Magenta'];
+const BAND_FR = ['Rouge', 'Orange', 'Jaune', 'Vert', 'Aqua', 'Bleu', 'Violet', 'Magenta'];
+const BAND_COL = ['#e0413a', '#ee8a2b', '#e8cf3a', '#46b955', '#33c1c1', '#3b72e0', '#8a52d6', '#d44cb0'];
+const BAND_HUE = [0, 30, 60, 120, 180, 240, 270, 300];
+const CURVE_CH = [['rgb', 'RVB', '#ddd'], ['r', 'R', '#f55'], ['g', 'V', '#5d5'], ['b', 'B', '#68f']];
+const idCurve = () => [[0, 0], [1, 1]];
+const neutral = () => ({
+  exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
+  temp: 0, tint: 0, vibrance: 0, saturation: 0,
+  hsl: { hue: Array(8).fill(0), sat: Array(8).fill(0), lum: Array(8).fill(0) },
+  curves: { rgb: idCurve(), r: idCurve(), g: idCurve(), b: idCurve() },
+  grain: 0, grainSize: 25
+});
+let P = neutral();
+let presets = store.get('presets', []);
+let activePreset = -1, base = null;
+const photos = []; let cur = -1;
+
+/* ---------- canvas / espace colorimétrique ---------- */
+const P3 = (() => { try { return document.createElement('canvas').getContext('2d', { colorSpace: 'display-p3' }).getContextAttributes().colorSpace === 'display-p3'; } catch { return false; } })();
+const ctx2d = (c, rf) => c.getContext('2d', Object.assign({ willReadFrequently: !!rf }, P3 ? { colorSpace: 'display-p3' } : {}));
+const IOS = /iP(hone|ad)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const MAX_PIX = IOS || /^((?!chrome|android).)*safari/i.test(navigator.userAgent) ? 16777216 : 120e6;
+
+/* ---------- moteur ---------- */
+const LIN = new Float32Array(256); for (let i = 0; i < 256; i++) { const c = i / 255; LIN[i] = c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; }
+const ENC = new Float32Array(4097); for (let i = 0; i <= 4096; i++) { const c = i / 4096; ENC[i] = c <= .0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - .055; }
+const NOISE = (() => { const n = new Float32Array(256 * 256); let s = 1234567; const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296 - .5;
+  for (let i = 0; i < n.length; i++) n[i] = (rnd() + rnd() + rnd() + rnd()) * 1.732; return n; })();
+
+function makeCurve(pts) {
+  const p = [...pts].sort((a, b) => a[0] - b[0]), n = p.length;
+  if (n < 2) return x => x;
+  const xs = p.map(a => a[0]), ys = p.map(a => a[1]), d = [], m = [];
+  for (let k = 0; k < n - 1; k++) d[k] = (ys[k + 1] - ys[k]) / Math.max(1e-6, xs[k + 1] - xs[k]);
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let k = 1; k < n - 1; k++) m[k] = d[k - 1] * d[k] <= 0 ? 0 : (d[k - 1] + d[k]) / 2;
+  for (let k = 0; k < n - 1; k++) {
+    if (d[k] === 0) { m[k] = m[k + 1] = 0; continue; }
+    const a = m[k] / d[k], b = m[k + 1] / d[k], s = a * a + b * b;
+    if (s > 9) { const t = 3 / Math.sqrt(s); m[k] = t * a * d[k]; m[k + 1] = t * b * d[k]; }
+  }
+  return x => {
+    if (x <= xs[0]) return ys[0]; if (x >= xs[n - 1]) return ys[n - 1];
+    let k = 0; while (x > xs[k + 1]) k++;
+    const h = xs[k + 1] - xs[k], t = (x - xs[k]) / h, t2 = t * t, t3 = t2 * t;
+    return (2 * t3 - 3 * t2 + 1) * ys[k] + (t3 - 2 * t2 + t) * h * m[k] + (-2 * t3 + 3 * t2) * ys[k + 1] + (t3 - t2) * h * m[k + 1];
+  };
+}
+const isId = pts => pts.length === 2 && pts[0][0] === 0 && pts[0][1] === 0 && pts[1][0] === 1 && pts[1][1] === 1;
+
+function prepare(p, longSide) {
+  const T = { p };
+  T.ev = 2 ** p.exposure;
+  T.gr = 1 + p.temp / 100 * .3; T.gb = 1 - p.temp / 100 * .3; T.gg = 1 - p.tint / 100 * .2;
+  T.sh = p.shadows / 100 * .3; T.hi = p.highlights / 100 * .3; T.wh = p.whites / 100 * .2; T.bl = p.blacks / 100 * .2;
+  const c = p.contrast / 100; T.cf = c >= 0 ? 1 + c * .7 : 1 + c * .8;
+  T.sat = 1 + p.saturation / 100; T.vib = p.vibrance / 100;
+  const h = p.hsl, any = [...h.hue, ...h.sat, ...h.lum].some(v => v);
+  T.color = any || p.saturation || p.vibrance;
+  T.dh = new Float32Array(360); T.ms = new Float32Array(360); T.dl = new Float32Array(360);
+  for (let a = 0; a < 360; a++) {
+    let i = 7; for (let k = 0; k < 8; k++) if (BAND_HUE[k] <= a) i = k;
+    const j = (i + 1) % 8, c0 = BAND_HUE[i], c1 = j ? BAND_HUE[j] : 360;
+    let t = (a - c0) / (c1 - c0); t = t * t * (3 - 2 * t);
+    const L = arr => arr[i] + (arr[j] - arr[i]) * t;
+    T.dh[a] = L(h.hue) / 100 * 30; T.ms[a] = 1 + L(h.sat) / 100; T.dl[a] = L(h.lum) / 100 * .25;
+  }
+  const cv = p.curves; T.curve = CURVE_CH.some(([k]) => !isId(cv[k]));
+  if (T.curve) {
+    const f0 = makeCurve(cv.rgb), fs = ['r', 'g', 'b'].map(k => makeCurve(cv[k]));
+    T.lut = fs.map(f => { const l = new Float32Array(1024); for (let i = 0; i < 1024; i++) l[i] = clamp(f(clamp(f0(i / 1023)))); return l; });
+  }
+  T.grainAmt = p.grain / 100 * .18;
+  const sz = (.8 + p.grainSize / 100 * 3) * (longSide / 3000);
+  T.inv = 1 / sz; T.gAmp = T.grainAmt * Math.sqrt(Math.max(1, sz));
+  return T;
+}
+
+function process(img, y0, y1, T) {
+  const W = img.width, d = img.data, p = T.p, N = NOISE;
+  const { ev, gr, gb, gg, sh, hi, wh, bl, cf, sat, vib, dh, ms, dl, lut, inv, gAmp } = T;
+  for (let y = y0; y < y1; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4;
+    let r = ENC[Math.min(4095, (LIN[d[i]] * ev * gr * 4095 + .5) | 0)];
+    let g = ENC[Math.min(4095, (LIN[d[i + 1]] * ev * gg * 4095 + .5) | 0)];
+    let b = ENC[Math.min(4095, (LIN[d[i + 2]] * ev * gb * 4095 + .5) | 0)];
+    const l = .2126 * r + .7152 * g + .0722 * b, il = 1 - l;
+    const add = sh * il * il + hi * l * l + wh * l ** 4 + bl * il ** 4;
+    r += add; g += add; b += add;
+    if (cf !== 1) { r = .5 + (r - .5) * cf; g = .5 + (g - .5) * cf; b = .5 + (b - .5) * cf; }
+    r = clamp(r); g = clamp(g); b = clamp(b);
+    if (T.color) {
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), dd = mx - mn;
+      if (dd > 1e-5) {
+        let L = (mx + mn) / 2, s = L > .5 ? dd / (2 - mx - mn) : dd / (mx + mn), h;
+        if (mx === r) h = ((g - b) / dd) % 6; else if (mx === g) h = (b - r) / dd + 2; else h = (r - g) / dd + 4;
+        h *= 60; if (h < 0) h += 360;
+        const hi_ = Math.min(359, h | 0);
+        h += dh[hi_]; h = ((h % 360) + 360) % 360;
+        s = clamp(s * ms[hi_] * sat * (1 + vib * (1 - s)));
+        L = clamp(L + dl[hi_] * s);
+        const q = L < .5 ? L * (1 + s) : L + s - L * s, pp = 2 * L - q, hh = h / 360;
+        const f = t => { t = t < 0 ? t + 1 : t > 1 ? t - 1 : t; return t < 1 / 6 ? pp + (q - pp) * 6 * t : t < .5 ? q : t < 2 / 3 ? pp + (q - pp) * (2 / 3 - t) * 6 : pp; };
+        r = f(hh + 1 / 3); g = f(hh); b = f(hh - 1 / 3);
+      }
+    }
+    if (T.curve) { r = lut[0][(r * 1023 + .5) | 0]; g = lut[1][(g * 1023 + .5) | 0]; b = lut[2][(b * 1023 + .5) | 0]; }
+    if (gAmp) {
+      const u = x * inv, v = y * inv, xi = Math.floor(u), yi = Math.floor(v), fx = u - xi, fy = v - yi;
+      const x0 = xi & 255, x1 = (xi + 1) & 255, y0_ = (yi & 255) << 8, y1_ = ((yi + 1) & 255) << 8;
+      const n = (N[y0_ | x0] * (1 - fx) + N[y0_ | x1] * fx) * (1 - fy) + (N[y1_ | x0] * (1 - fx) + N[y1_ | x1] * fx) * fy;
+      const ll = .2126 * r + .7152 * g + .0722 * b, w = 1 - .6 * (2 * ll - 1) ** 2, k = n * gAmp * w;
+      r += k; g += k; b += k;
+    }
+    d[i] = clamp(r) * 255 + .5; d[i + 1] = clamp(g) * 255 + .5; d[i + 2] = clamp(b) * 255 + .5;
+  }
+}
+
+/* ---------- aperçu ---------- */
+const view = $('#view'), vctx = ctx2d(view);
+let dirty = false, showBefore = false;
+function schedule() { if (dirty) return; dirty = true; requestAnimationFrame(() => { dirty = false; render(); }); }
+function render() {
+  const ph = photos[cur]; if (!ph) return;
+  if (showBefore) { vctx.putImageData(ph.src, 0, 0); return; }
+  const out = new ImageData(new Uint8ClampedArray(ph.src.data), ph.src.width, ph.src.height, P3 ? { colorSpace: 'display-p3' } : undefined);
+  process(out, 0, out.height, prepare(P, Math.max(out.width, out.height)));
+  vctx.putImageData(out, 0, 0);
+}
+const loadImg = file => new Promise((res, rej) => { const u = URL.createObjectURL(file), im = new Image(); im.onload = () => res({ im, u }); im.onerror = rej; im.src = u; });
+
+async function addPhoto(file) {
+  const { im, u } = await loadImg(file);
+  const s = Math.min(1, 1400 / Math.max(im.naturalWidth, im.naturalHeight));
+  const w = Math.max(1, Math.round(im.naturalWidth * s)), h = Math.max(1, Math.round(im.naturalHeight * s));
+  const c = el('canvas', { width: w, height: h }), cx = ctx2d(c, true);
+  cx.drawImage(im, 0, 0, w, h);
+  const t = el('canvas', { width: 96, height: Math.round(96 * h / w) }); t.getContext('2d').drawImage(c, 0, 0, t.width, t.height);
+  photos.push({ file, name: file.name.replace(/\.[^.]+$/, ''), src: cx.getImageData(0, 0, w, h), thumb: t.toDataURL('image/jpeg', .7) });
+  URL.revokeObjectURL(u);
+}
+function drawThumbs() {
+  const box = $('#thumbs'); box.replaceChildren();
+  photos.forEach((p, i) => box.append(el('img', { src: p.thumb, className: i === cur ? 'on' : '', onclick: () => select(i) })));
+}
+function select(i) {
+  cur = i; const ph = photos[i]; view.width = ph.src.width; view.height = ph.src.height;
+  $('#empty').hidden = true; $('#cmp').hidden = false; drawThumbs(); render();
+}
+$('#fPhotos').onchange = async e => {
+  const files = [...e.target.files]; e.target.value = '';
+  const first = photos.length;
+  for (const f of files) { try { await addPhoto(f); } catch { alert('Image illisible : ' + f.name); } }
+  if (photos.length > first) select(first);
+};
+const cmp = $('#cmp');
+cmp.onpointerdown = () => { showBefore = true; render(); };
+['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => cmp.addEventListener(ev, () => { if (showBefore) { showBefore = false; render(); } }));
+cmp.oncontextmenu = e => e.preventDefault();
+
+/* ---------- sliders ---------- */
+const syncers = [];
+function slider(box, label, min, max, step, get, set) {
+  const inp = el('input', { type: 'range', min, max, step }), out = el('output');
+  const upd = () => { inp.value = get(); out.textContent = (+get()).toFixed(step < 1 ? 2 : 0); };
+  inp.oninput = () => { set(+inp.value); out.textContent = (+inp.value).toFixed(step < 1 ? 2 : 0); schedule(); };
+  const lb = el('label', { textContent: label, ondblclick: () => { set(0); upd(); schedule(); } });
+  box.append(el('div', { className: 'row' }, [lb, inp, out]));
+  syncers.push(upd); upd();
+}
+const prop = k => [() => P[k], v => P[k] = v];
+[['Exposition', 'exposure', -5, 5, .05], ['Contraste', 'contrast', -100, 100, 1], ['Hautes lumières', 'highlights', -100, 100, 1],
+ ['Ombres', 'shadows', -100, 100, 1], ['Blancs', 'whites', -100, 100, 1], ['Noirs', 'blacks', -100, 100, 1]]
+  .forEach(([l, k, a, b, s]) => slider($('#sLight'), l, a, b, s, ...prop(k)));
+[['Température', 'temp', -100, 100, 1], ['Teinte', 'tint', -100, 100, 1], ['Vibrance', 'vibrance', -100, 100, 1], ['Saturation', 'saturation', -100, 100, 1]]
+  .forEach(([l, k, a, b, s]) => slider($('#sColor'), l, a, b, s, ...prop(k)));
+slider($('#sGrain'), 'Quantité', 0, 100, 1, ...prop('grain'));
+slider($('#sGrain'), 'Taille', 0, 100, 1, ...prop('grainSize'));
+let band = 0;
+[['Teinte', 'hue'], ['Saturation', 'sat'], ['Luminance', 'lum']].forEach(([l, k]) =>
+  slider($('#sHsl'), l, -100, 100, 1, () => P.hsl[k][band], v => P.hsl[k][band] = v));
+BAND_FR.forEach((n, i) => $('#bands').append(el('button', {
+  className: 'sw' + (i ? '' : ' on'), title: n, style: 'background:' + BAND_COL[i],
+  onclick: e => { band = i; [...$('#bands').children].forEach((b, j) => b.classList.toggle('on', j === i)); syncAll(); }
+})));
+const syncAll = () => syncers.forEach(f => f());
+
+/* ---------- courbe ---------- */
+const cc = $('#curve'), cctx = cc.getContext('2d'); let chan = 'rgb', drag = -1;
+CURVE_CH.forEach(([k, n]) => $('#curveCh').append(el('button', { className: 'chip' + (k === 'rgb' ? ' on' : ''), textContent: n,
+  onclick: e => { chan = k; [...$('#curveCh').children].forEach(b => b.classList.toggle('on', b === e.target)); drawCurve(); } })));
+function drawCurve() {
+  const dpr = devicePixelRatio || 1, S = cc.clientWidth * dpr; if (!S) return; cc.width = cc.height = S;
+  const g = cctx; g.clearRect(0, 0, S, S); g.strokeStyle = '#2a2d31'; g.lineWidth = dpr;
+  for (let i = 1; i < 4; i++) { g.beginPath(); g.moveTo(S * i / 4, 0); g.lineTo(S * i / 4, S); g.moveTo(0, S * i / 4); g.lineTo(S, S * i / 4); g.stroke(); }
+  const pts = P.curves[chan], f = makeCurve(pts), col = CURVE_CH.find(c => c[0] === chan)[2];
+  g.strokeStyle = col; g.lineWidth = 2 * dpr; g.beginPath();
+  for (let i = 0; i <= 200; i++) { const x = i / 200, y = clamp(f(x)); i ? g.lineTo(x * S, (1 - y) * S) : g.moveTo(x * S, (1 - y) * S); } g.stroke();
+  g.fillStyle = col; pts.forEach(([x, y]) => { g.beginPath(); g.arc(x * S, (1 - y) * S, 6 * dpr, 0, 7); g.fill(); });
+}
+const cpos = e => { const r = cc.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, 1 - (e.clientY - r.top) / r.height]; };
+const nearest = (pts, [x, y]) => { let b = -1, bd = .06; pts.forEach((p, i) => { const d = Math.hypot(p[0] - x, p[1] - y); if (d < bd) { bd = d; b = i; } }); return b; };
+cc.onpointerdown = e => {
+  const pts = P.curves[chan], pos = cpos(e); cc.setPointerCapture(e.pointerId);
+  drag = nearest(pts, pos);
+  if (drag < 0) { pts.push([clamp(pos[0]), clamp(pos[1])]); pts.sort((a, b) => a[0] - b[0]); drag = nearest(pts, pos); }
+  drawCurve();
+};
+cc.onpointermove = e => {
+  if (drag < 0) return; const pts = P.curves[chan], [x, y] = cpos(e), last = pts.length - 1;
+  const lo = drag > 0 ? pts[drag - 1][0] + .01 : 0, hi = drag < last ? pts[drag + 1][0] - .01 : 1;
+  pts[drag] = [drag === 0 ? pts[0][0] : drag === last ? pts[last][0] : clamp(x, lo, hi), clamp(y)];
+  drawCurve(); schedule();
+};
+cc.onpointerup = e => {
+  if (drag < 0) return; const pts = P.curves[chan], [x, y] = cpos(e);
+  if (drag > 0 && drag < pts.length - 1 && (x < -.1 || x > 1.1 || y < -.1 || y > 1.1)) { pts.splice(drag, 1); drawCurve(); schedule(); }
+  drag = -1;
+};
+cc.ondblclick = e => { const pts = P.curves[chan], i = nearest(pts, cpos(e)); if (i > 0 && i < pts.length - 1) { pts.splice(i, 1); drawCurve(); schedule(); } };
+$('#curveReset').onclick = () => { P.curves[chan] = idCurve(); drawCurve(); schedule(); };
+
+/* ---------- presets ---------- */
+const MAP = { Exposure2012: 'exposure', Contrast2012: 'contrast', Highlights2012: 'highlights', Shadows2012: 'shadows', Whites2012: 'whites', Blacks2012: 'blacks',
+  Vibrance: 'vibrance', Saturation: 'saturation', Tint: 'tint', GrainAmount: 'grain', GrainSize: 'grainSize' };
+function parsePreset(text, fname) {
+  const kv = {}, seqs = {};
+  const cs = text.match(/crs:ToneCurvePV2012(?:Red|Green|Blue)?/g) ? true : false;
+  if (/<x:xmpmeta|<rdf:RDF/i.test(text)) {
+    for (const m of text.matchAll(/crs:([A-Za-z0-9]+)="([^"]*)"/g)) kv[m[1]] = m[2];
+    for (const m of text.matchAll(/<crs:([A-Za-z0-9]+)>([^<]+)<\/crs:\1>/g)) kv[m[1]] = m[2].trim();
+    for (const m of text.matchAll(/<crs:(ToneCurvePV2012(?:Red|Green|Blue)?)>([\s\S]*?)<\/crs:\1>/g))
+      seqs[m[1]] = [...m[2].matchAll(/<rdf:li>\s*([-\d.]+)\s*,\s*([-\d.]+)\s*<\/rdf:li>/g)].map(a => [+a[1], +a[2]]);
+    for (const m of text.matchAll(/<crs:Name>[\s\S]*?<rdf:li[^>]*>([^<]+)<\/rdf:li>/g)) kv.__name = m[1];
+  } else {
+    for (const m of text.matchAll(/(ToneCurvePV2012(?:Red|Green|Blue)?)\s*=\s*\{([^}]*)\}/g)) {
+      const n = m[2].split(',').map(s => parseFloat(s)).filter(v => !isNaN(v)), a = [];
+      for (let i = 0; i + 1 < n.length; i += 2) a.push([n[i], n[i + 1]]); seqs[m[1]] = a;
+    }
+    for (const m of text.matchAll(/\b([A-Za-z0-9]+)\s*=\s*(-?[\d.]+)\s*,/g)) kv[m[1]] = m[2];
+    const nm = text.match(/internalName\s*=\s*"([^"]*)"/); if (nm) kv.__name = nm[1];
+  }
+  const p = neutral(); let n = 0;
+  for (const [src, dst] of Object.entries(MAP)) if (kv[src] !== undefined && !isNaN(+kv[src])) { p[dst] = +kv[src]; n++; }
+  if (kv.Temperature !== undefined && Math.abs(+kv.Temperature) <= 100) { p.temp = +kv.Temperature; n++; }
+  BANDS.forEach((b, i) => {
+    [['hue', 'HueAdjustment'], ['sat', 'SaturationAdjustment'], ['lum', 'LuminanceAdjustment']].forEach(([k, pre]) => {
+      const v = kv[pre + b]; if (v !== undefined && !isNaN(+v)) { p.hsl[k][i] = +v; n++; }
+    });
+  });
+  [['rgb', 'ToneCurvePV2012'], ['r', 'ToneCurvePV2012Red'], ['g', 'ToneCurvePV2012Green'], ['b', 'ToneCurvePV2012Blue']].forEach(([k, key]) => {
+    const a = seqs[key]; if (a && a.length >= 2) {
+      const pts = a.map(([x, y]) => [clamp(x / 255), clamp(y / 255)]).sort((u, v) => u[0] - v[0]).filter((q, i, ar) => !i || q[0] - ar[i - 1][0] > .004);
+      if (pts.length >= 2) { p.curves[k] = pts; n++; }
+    }
+  });
+  return n ? { name: kv.__name || fname.replace(/\.[^.]+$/, ''), params: p, count: n } : null;
+}
+function lerpPreset(b, k) {
+  const p = neutral();
+  for (const key of ['exposure', 'contrast', 'highlights', 'shadows', 'whites', 'blacks', 'temp', 'tint', 'vibrance', 'saturation', 'grain']) p[key] = b[key] * k;
+  p.grainSize = b.grainSize;
+  for (const a of ['hue', 'sat', 'lum']) p.hsl[a] = b.hsl[a].map(v => v * k);
+  for (const c of ['rgb', 'r', 'g', 'b']) p.curves[c] = b.curves[c].map(([x, y]) => [x, x + k * (y - x)]);
+  return p;
+}
+function applyBase() { if (!base) return; P = lerpPreset(base, +$('#intensity').value / 100); syncAll(); drawCurve(); schedule(); }
+function drawPresets() {
+  const box = $('#presetList'); box.replaceChildren();
+  presets.forEach((pr, i) => box.append(el('div', { className: 'preset' }, [
+    el('button', { className: 'name' + (i === activePreset ? ' on' : ''), textContent: pr.name, onclick: () => {
+      activePreset = i; base = pr.params; $('#intensity').value = 100; $('#intensity').nextElementSibling.textContent = 100; applyBase(); drawPresets();
+      $('#presetInfo').textContent = pr.count + ' réglages lus dans « ' + pr.name + ' ».';
+    } }),
+    el('button', { textContent: '×', onclick: () => { presets.splice(i, 1); if (activePreset === i) { activePreset = -1; base = null; } else if (activePreset > i) activePreset--; store.set('presets', presets); drawPresets(); } })
+  ])));
+}
+$('#fPresets').onchange = async e => {
+  const bad = [];
+  for (const f of e.target.files) { const pr = parsePreset(await f.text(), f.name); pr ? presets.push(pr) : bad.push(f.name); }
+  e.target.value = ''; store.set('presets', presets); drawPresets();
+  if (bad.length) alert('Aucun réglage reconnu dans : ' + bad.join(', '));
+};
+$('#intensity').oninput = e => { e.target.nextElementSibling.textContent = e.target.value; applyBase(); };
+$('#resetAll').onclick = () => { P = neutral(); base = null; activePreset = -1; syncAll(); drawCurve(); drawPresets(); schedule(); };
+
+/* ---------- export ---------- */
+let results = [];
+async function exportPhoto(ph, onRows) {
+  const { im, u } = await loadImg(ph.file);
+  const k = Math.min(1, Math.sqrt(MAX_PIX / (im.naturalWidth * im.naturalHeight)));
+  const w = Math.round(im.naturalWidth * k), h = Math.round(im.naturalHeight * k);
+  const c = el('canvas', { width: w, height: h }), cx = ctx2d(c, true);
+  cx.drawImage(im, 0, 0, w, h); URL.revokeObjectURL(u);
+  const data = cx.getImageData(0, 0, w, h), T = prepare(P, Math.max(w, h));
+  for (let y = 0; y < h; y += 128) { process(data, y, Math.min(h, y + 128), T); onRows(y / h); await new Promise(r => setTimeout(r)); }
+  cx.putImageData(data, 0, 0);
+  const jpg = $('#fmt').value === 'jpg';
+  const blob = await new Promise(r => c.toBlob(r, jpg ? 'image/jpeg' : 'image/png', 1));
+  if (!blob) throw new Error('encodage impossible');
+  return { blob, name: ph.name + '_preset.' + (jpg ? 'jpg' : 'png'), shrunk: k < 1 ? `${w}×${h}` : '' };
+}
+async function runExport(list) {
+  if (!list.length) return;
+  const prog = $('#prog'), st = $('#expStatus'); prog.hidden = false; $('#btnSave').hidden = true; results = [];
+  document.querySelectorAll('#panel button').forEach(b => b.disabled = true);
+  try {
+    for (let i = 0; i < list.length; i++) {
+      st.textContent = `Traitement ${i + 1}/${list.length}…`;
+      const r = await exportPhoto(list[i], f => prog.value = (i + f) / list.length);
+      results.push(r);
+      if (r.shrunk) st.textContent = `Attention : ${list[i].name} réduite à ${r.shrunk} (limite du navigateur).`;
+    }
+    prog.value = 1; st.textContent = `${results.length} fichier(s) prêt(s).`;
+    $('#btnSave').hidden = false; $('#btnSave').textContent = 'Enregistrer / Partager (' + results.length + ')';
+  } catch (err) { st.textContent = 'Erreur : ' + err.message; }
+  document.querySelectorAll('#panel button').forEach(b => b.disabled = false);
+}
+$('#btnExport').onclick = () => runExport(photos[cur] ? [photos[cur]] : []);
+$('#btnExportAll').onclick = () => runExport(photos);
+$('#btnSave').onclick = async () => {
+  const files = results.map(r => new File([r.blob], r.name, { type: r.blob.type }));
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try { await navigator.share({ files }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  files.forEach((f, i) => setTimeout(() => { const a = el('a', { href: URL.createObjectURL(f), download: f.name }); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }, i * 400));
+};
+
+/* ---------- onglets ---------- */
+const tabs = [...document.querySelectorAll('.tab')];
+tabs.forEach((t, i) => $('#nav').append(el('button', { textContent: t.dataset.tab, className: i ? '' : 'on', onclick: e => {
+  [...$('#nav').children].forEach(b => b.classList.toggle('on', b === e.target));
+  tabs.forEach(x => x.classList.toggle('on', x === t)); if (t.dataset.tab === 'Courbe') drawCurve();
+} })));
+tabs[0].classList.add('on');
+addEventListener('resize', drawCurve);
+/* presets intégrés (fichier local optionnel, non publié) */
+if (typeof BUILTIN !== 'undefined') BUILTIN.forEach(([f, t]) => { const pr = parsePreset(t, f); if (pr && !presets.some(x => x.name === pr.name)) presets.push(pr); });
+drawPresets();
+</script>
+</body>
+</html>
