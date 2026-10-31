@@ -112,10 +112,11 @@ progress{width:100%;accent-color:var(--acc)}
   <section class="tab" data-tab="Export">
     <div class="row" style="grid-template-columns:92px 1fr"><label>Format</label>
       <select id="fmt">
-        <option value="png">PNG – sans aucune perte</option>
-        <option value="jpg">JPEG – qualité 100 %</option>
+        <option value="jpg">JPEG</option>
+        <option value="png">PNG – sans perte (très lourd)</option>
       </select></div>
-    <div class="hint">Résolution d'origine conservée, aucun redimensionnement (sauf photos dépassant la limite du navigateur, signalé). Les métadonnées EXIF ne sont pas conservées.</div>
+    <div class="row" id="qRow"><label>Qualité JPEG</label><input id="quality" type="range" min="70" max="100" value="92"><output>92</output></div>
+    <div class="hint">Résolution d'origine conservée (sauf photos dépassant la limite du navigateur, signalé). En JPEG, les EXIF de l'original (appareil, date, réglages, GPS) sont recopiés ; 90-92 % donne un poids proche de l'original sans perte visible.</div>
     <button class="pri" id="btnExport">Exporter cette photo</button>
     <button id="btnExportAll">Exporter toutes les photos</button>
     <progress id="prog" value="0" max="1" hidden></progress>
@@ -540,6 +541,38 @@ $('#intensity').oninput = e => { e.target.nextElementSibling.textContent = e.tar
 $('#resetAll').onclick = () => { P = neutral(); base = null; activePreset = -1; syncAll(); drawCurve(); drawPresets(); schedule(); };
 
 /* ---------- export ---------- */
+const qOut = $('#quality').nextElementSibling;
+$('#quality').oninput = e => qOut.textContent = e.target.value;
+$('#fmt').onchange = e => $('#qRow').hidden = e.target.value !== 'jpg';
+
+/* recopie le segment EXIF (APP1) de l'original dans le JPEG exporté, orientation remise à 1 (pixels déjà redressés) */
+function findExif(b) {
+  if (b[0] !== 0xFF || b[1] !== 0xD8) return null;
+  for (let i = 2; i + 4 <= b.length && b[i] === 0xFF;) {
+    const m = b[i + 1], len = b[i + 2] << 8 | b[i + 3];
+    if (m === 0xDA || m === 0xD9) break;
+    if (m === 0xE1 && b[i + 4] === 0x45 && b[i + 5] === 0x78 && b[i + 6] === 0x69 && b[i + 7] === 0x66 && b[i + 8] === 0 && b[i + 9] === 0)
+      return b.slice(i, i + 2 + len);
+    i += 2 + len;
+  }
+  return null;
+}
+function resetOrientation(seg) {
+  const t = 10, le = seg[t] === 0x49, dv = new DataView(seg.buffer, seg.byteOffset, seg.length);
+  try {
+    const ifd = t + dv.getUint32(t + 4, le), n = dv.getUint16(ifd, le);
+    for (let k = 0; k < n; k++) { const e = ifd + 2 + k * 12; if (dv.getUint16(e, le) === 0x0112) { dv.setUint16(e + 8, 1, le); break; } }
+  } catch {}
+}
+async function withExif(out, orig) {
+  const exif = findExif(new Uint8Array(await orig.slice(0, 256 * 1024).arrayBuffer()));
+  if (!exif) return out;
+  resetOrientation(exif);
+  const o = new Uint8Array(await out.arrayBuffer());
+  let p = 2; // saute SOI et un éventuel APP0 JFIF (l'EXIF doit suivre SOI)
+  if (o[2] === 0xFF && o[3] === 0xE0) p = 4 + (o[4] << 8 | o[5]);
+  return new Blob([o.subarray(0, 2), exif, o.subarray(p)], { type: 'image/jpeg' });
+}
 let results = [];
 async function exportPhoto(ph, onRows) {
   const { im, u } = await loadImg(ph.file);
@@ -551,8 +584,9 @@ async function exportPhoto(ph, onRows) {
   for (let y = 0; y < h; y += 128) { process(data, y, Math.min(h, y + 128), T); onRows(y / h); await new Promise(r => setTimeout(r)); }
   cx.putImageData(data, 0, 0);
   const jpg = $('#fmt').value === 'jpg';
-  const blob = await new Promise(r => c.toBlob(r, jpg ? 'image/jpeg' : 'image/png', 1));
+  let blob = await new Promise(r => c.toBlob(r, jpg ? 'image/jpeg' : 'image/png', jpg ? +$('#quality').value / 100 : 1));
   if (!blob) throw new Error('encodage impossible');
+  if (jpg) blob = await withExif(blob, ph.file);
   return { blob, name: ph.name + '_preset.' + (jpg ? 'jpg' : 'png'), shrunk: k < 1 ? `${w}×${h}` : '' };
 }
 async function runExport(list) {
